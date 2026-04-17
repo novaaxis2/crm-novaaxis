@@ -55,6 +55,12 @@ function getMediaInfoUrl(mediaId: string) {
   return `https://graph.facebook.com/${apiVersion}/${mediaId}`;
 }
 
+function getProfilePhotoUrl(phoneE164: string) {
+  const { apiVersion } = getWhatsAppConfig();
+  const digits = phoneE164.replace(/\D/g, '');
+  return `https://graph.facebook.com/${apiVersion}/${digits}/profile_picture`;
+}
+
 function getRequestHeaders() {
   const { accessToken } = getWhatsAppConfig();
   return {
@@ -209,6 +215,36 @@ export async function downloadWhatsAppMedia(mediaUrl: string) {
 
   const arrayBuffer = await response.arrayBuffer();
   return Buffer.from(arrayBuffer);
+}
+
+export async function getWhatsAppUserProfilePhotoUrl(phoneE164: string) {
+  try {
+    const response = await fetch(getProfilePhotoUrl(phoneE164), {
+      method: 'GET',
+      headers: {
+        ...getRequestHeaders(),
+      },
+      redirect: 'manual',
+    });
+
+    const location = response.headers.get('location');
+    if (location && /^https?:\/\//i.test(location)) {
+      return location;
+    }
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const text = await response.text();
+    if (/^https?:\/\//i.test(text.trim())) {
+      return text.trim();
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 export async function uploadWhatsAppMedia(file: File): Promise<WhatsAppMediaUploadResult> {

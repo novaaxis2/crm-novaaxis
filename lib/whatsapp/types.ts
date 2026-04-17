@@ -23,6 +23,7 @@ export interface WhatsAppConversationSummary {
   id: string;
   phone: string;
   name: string;
+  avatarUrl?: string;
   lastMessagePreview: string;
   lastMessageAt: string;
   unreadCount: number;

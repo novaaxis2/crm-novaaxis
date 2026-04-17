@@ -20,12 +20,14 @@ interface ContactRow {
   id: string;
   phone_e164: string;
   display_name: string;
+  profile_photo_url: string | null;
 }
 
 interface ConversationRow {
   id: string;
   phone_e164: string;
   display_name: string;
+  avatar_url: string | null;
   last_message_preview: string;
   last_message_at: string;
   unread_count: number;
@@ -92,6 +94,7 @@ function toConversationSummary(row: ConversationRow): WhatsAppConversationSummar
     id: row.id,
     phone: row.phone_e164,
     name: row.display_name,
+    avatarUrl: row.avatar_url ?? undefined,
     lastMessagePreview: row.last_message_preview,
     lastMessageAt: new Date(row.last_message_at).toISOString(),
     unreadCount: Number(row.unread_count ?? 0),
@@ -174,6 +177,23 @@ async function upsertContactAndConversation(phone: string, name?: string) {
   };
 }
 
+async function updateContactProfilePhoto(phone: string, profilePhotoUrl?: string) {
+  if (!profilePhotoUrl || !profilePhotoUrl.trim()) {
+    return;
+  }
+
+  await queryDb(
+    `
+      UPDATE whatsapp_contacts
+      SET
+        profile_photo_url = $2,
+        updated_at = NOW()
+      WHERE phone_e164 = $1
+    `,
+    [phone, profilePhotoUrl.trim()],
+  );
+}
+
 async function resolveConversation(conversationId: string) {
   const result = await queryDb<ConversationRow>(
     `
@@ -181,6 +201,7 @@ async function resolveConversation(conversationId: string) {
         c.id,
         c.phone_e164,
         ct.display_name,
+        ct.profile_photo_url AS avatar_url,
         c.last_message_preview,
         c.last_message_at,
         c.unread_count
@@ -204,6 +225,7 @@ export async function ensureConversation(phone: string, name?: string) {
 export interface AppendMessageInput {
   phone: string;
   name?: string;
+  avatarUrl?: string;
   direction: WhatsAppMessageDirection;
   type: WhatsAppMessageType;
   text: string;
@@ -256,6 +278,7 @@ export async function appendMessage(input: AppendMessageInput): Promise<WhatsApp
   }
 
   const { conversationId } = await upsertContactAndConversation(input.phone, input.name);
+  await updateContactProfilePhoto(input.phone, input.avatarUrl);
   const messageId = randomUUID();
   const timestamp = input.timestamp ? new Date(input.timestamp).toISOString() : new Date().toISOString();
 
@@ -357,6 +380,7 @@ export async function listConversations() {
         c.id,
         c.phone_e164,
         ct.display_name,
+        ct.profile_photo_url AS avatar_url,
         c.last_message_preview,
         c.last_message_at,
         c.unread_count
@@ -465,6 +489,7 @@ export async function markMessageStatusByExternalId(
 export async function storeInboundMessage(extracted: {
   phone: string;
   name?: string;
+  avatarUrl?: string;
   externalMessageId?: string;
   timestamp: string;
   type: WhatsAppMessageType;
@@ -477,6 +502,7 @@ export async function storeInboundMessage(extracted: {
   return appendMessage({
     phone: extracted.phone,
     name: extracted.name,
+    avatarUrl: extracted.avatarUrl,
     direction: 'inbound',
     type: extracted.type,
     text: extracted.text,
@@ -559,6 +585,34 @@ export async function saveWebhookEventAudit(options: {
     payloadHash,
     inserted: Boolean(insert.rows[0]?.id),
   };
+}
+
+export async function upsertContactProfile(options: {
+  phone: string;
+  name?: string;
+  avatarUrl?: string;
+}) {
+  const phone = options.phone.trim();
+  if (!phone) {
+    return;
+  }
+
+  const contactId = contactIdFromPhone(phone);
+  const displayName = options.name?.trim() || phone;
+  const profilePhotoUrl = options.avatarUrl?.trim() || null;
+
+  await queryDb(
+    `
+      INSERT INTO whatsapp_contacts (id, phone_e164, display_name, profile_photo_url, updated_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      ON CONFLICT (phone_e164)
+      DO UPDATE SET
+        display_name = EXCLUDED.display_name,
+        profile_photo_url = COALESCE(EXCLUDED.profile_photo_url, whatsapp_contacts.profile_photo_url),
+        updated_at = NOW()
+    `,
+    [contactId, phone, displayName, profilePhotoUrl],
+  );
 }
 
 export async function markWebhookAuditProcessed(payloadHash: string, error?: string) {

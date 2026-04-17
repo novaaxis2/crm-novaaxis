@@ -82,6 +82,17 @@ function normalizePhoneClient(input: string) {
 
 const MAX_UPLOAD_SIZE = 64 * 1024 * 1024;
 
+function getInitials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) {
+    return 'U';
+  }
+  if (parts.length === 1) {
+    return parts[0].slice(0, 1).toUpperCase();
+  }
+  return `${parts[0].slice(0, 1)}${parts[1].slice(0, 1)}`.toUpperCase();
+}
+
 function getMessageTypeLabel(message: WhatsAppStoredMessage) {
   if (message.type === 'image') return 'Image';
   if (message.type === 'document') return message.fileName || 'Document';
@@ -91,6 +102,32 @@ function getMessageTypeLabel(message: WhatsAppStoredMessage) {
   if (message.type === 'contacts') return 'Contact';
   if (message.type === 'location') return 'Location';
   return 'Message';
+}
+
+function imageUrlFromMessage(message: WhatsAppStoredMessage) {
+  if (message.type !== 'image') {
+    return null;
+  }
+
+  if (typeof message.mediaUrl === 'string' && message.mediaUrl.trim()) {
+    return message.mediaUrl;
+  }
+
+  const metadata = message.metadata as Record<string, unknown> | undefined;
+  const candidates: unknown[] = [
+    metadata?.imageUrl,
+    metadata?.url,
+    metadata?.mediaUrl,
+    (metadata?.image as Record<string, unknown> | undefined)?.url,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+
+  return null;
 }
 
 export function WhatsAppChat() {
@@ -584,8 +621,18 @@ export function WhatsAppChat() {
                     onClick={() => void handleSelectConversation(conversation)}
                     className="flex w-full items-start gap-3 border-b border-gray-100 p-3 text-left transition hover:bg-gray-50"
                   >
-                    <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-green-100 text-green-700">
-                      <WhatsAppIcon className="h-5 w-5" />
+                    <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center overflow-hidden rounded-full border border-gray-200 bg-gray-100">
+                      {conversation.avatarUrl ? (
+                        <img
+                          src={conversation.avatarUrl}
+                          alt={conversation.name}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <span className="text-xs font-semibold text-gray-600">
+                          {getInitials(conversation.name)}
+                        </span>
+                      )}
                     </div>
 
                     <div className="min-w-0 flex-1">
@@ -624,6 +671,22 @@ export function WhatsAppChat() {
                 <ArrowLeft className="h-5 w-5 text-gray-600" />
               </button>
 
+              {selectedConversation && (
+                <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-gray-200 bg-gray-100">
+                  {selectedConversation.avatarUrl ? (
+                    <img
+                      src={selectedConversation.avatarUrl}
+                      alt={selectedConversation.name}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <span className="text-[10px] font-semibold text-gray-600">
+                      {getInitials(selectedConversation.name)}
+                    </span>
+                  )}
+                </div>
+              )}
+
               <div className="min-w-0 flex-1">
                 <h3 className="truncate text-sm font-semibold text-gray-900">
                   {selectedConversation?.name || 'New WhatsApp Chat'}
@@ -651,14 +714,31 @@ export function WhatsAppChat() {
               ) : messages.length > 0 ? (
                 messages.map((message) => {
                   const isOutbound = message.direction === 'outbound';
+                  const inboundDisplayName = selectedConversation?.name || message.phone;
 
                   return (
                     <div
                       key={message.id}
-                      className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}
+                      className={`flex items-end gap-2 ${isOutbound ? 'justify-end' : 'justify-start'}`}
                     >
+                      {!isOutbound && (
+                        <div className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-full border border-gray-200 bg-gray-100">
+                          {selectedConversation?.avatarUrl ? (
+                            <img
+                              src={selectedConversation.avatarUrl}
+                              alt={inboundDisplayName}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <span className="text-[9px] font-semibold text-gray-600">
+                              {getInitials(inboundDisplayName)}
+                            </span>
+                          )}
+                        </div>
+                      )}
+
                       <div
-                        className={`max-w-[80%] rounded-2xl px-4 py-2 ${
+                        className={`max-w-[78%] rounded-2xl px-4 py-2 ${
                           isOutbound
                             ? 'rounded-br-none bg-green-500 text-white'
                             : 'rounded-bl-none border border-gray-200 bg-white text-gray-900'
@@ -675,6 +755,21 @@ export function WhatsAppChat() {
                         )}
 
                         <p className="break-words text-sm">{message.text}</p>
+
+                        {message.type === 'image' && imageUrlFromMessage(message) && (
+                          <a
+                            href={imageUrlFromMessage(message) || '#'}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-2 block"
+                          >
+                            <img
+                              src={imageUrlFromMessage(message) || ''}
+                              alt="Image message"
+                              className="max-h-64 w-auto rounded-xl border border-black/10 object-cover"
+                            />
+                          </a>
+                        )}
 
                         {message.mediaUrl && (
                           <a
@@ -843,10 +938,10 @@ export function WhatsAppChat() {
                 <button
                   onClick={() => void handleSendMessage()}
                   disabled={isSending || (!inputValue.trim() && !selectedFile)}
-                  className="rounded-full p-2 text-green-500 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-green-500 text-white shadow-sm transition hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-50"
                   title="Send"
                 >
-                  {isSending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
+                  {isSending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-4 w-4" />}
                 </button>
               </div>
             </div>

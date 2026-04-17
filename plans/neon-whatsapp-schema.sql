@@ -5,9 +5,13 @@ CREATE TABLE IF NOT EXISTS whatsapp_contacts (
   id TEXT PRIMARY KEY,
   phone_e164 TEXT NOT NULL UNIQUE,
   display_name TEXT NOT NULL,
+  profile_photo_url TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE whatsapp_contacts
+  ADD COLUMN IF NOT EXISTS profile_photo_url TEXT;
 
 CREATE TABLE IF NOT EXISTS whatsapp_conversations (
   id TEXT PRIMARY KEY,

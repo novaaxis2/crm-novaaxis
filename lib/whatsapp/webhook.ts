@@ -1,9 +1,9 @@
 import crypto from 'node:crypto';
 
-import { downloadWhatsAppMedia, getWhatsAppMediaInfo } from './cloud-api';
+import { downloadWhatsAppMedia, getWhatsAppMediaInfo, getWhatsAppUserProfilePhotoUrl } from './cloud-api';
 import { normalizeWaIdToE164 } from './phone';
 import { getS3MissingConfig } from './persistence-env';
-import { upsertMediaObject } from './repository';
+import { upsertContactProfile, upsertMediaObject } from './repository';
 import { buildPhoneScopedMediaKey, uploadBufferToS3 } from './s3';
 import type { WhatsAppMessageStatus, WhatsAppMessageType } from './types';
 
@@ -100,6 +100,7 @@ export interface WhatsAppWebhookPayload {
 export interface ExtractedInboundMessage {
   phone: string;
   name?: string;
+  avatarUrl?: string;
   externalMessageId?: string;
   timestamp: string;
   type: WhatsAppMessageType;
@@ -483,6 +484,16 @@ export async function handleWebhookEvent(payload: WhatsAppWebhookPayload) {
 
   const messages = extractInboundMessages(payload);
   for (const msg of messages) {
+    const avatarUrl = await getWhatsAppUserProfilePhotoUrl(msg.phone);
+    if (avatarUrl) {
+      msg.avatarUrl = avatarUrl;
+      await upsertContactProfile({
+        phone: msg.phone,
+        name: msg.name,
+        avatarUrl,
+      });
+    }
+
     const stored = await storeInboundMessage(msg);
     if (s3Ready && msg.mediaId) {
       await mirrorInboundMediaToS3(msg, stored.id);
