@@ -1,6 +1,10 @@
 import crypto from 'node:crypto';
 
+import { downloadWhatsAppMedia, getWhatsAppMediaInfo } from './cloud-api';
 import { normalizeWaIdToE164 } from './phone';
+import { getS3MissingConfig } from './persistence-env';
+import { upsertMediaObject } from './repository';
+import { buildPhoneScopedMediaKey, uploadBufferToS3 } from './s3';
 import type { WhatsAppMessageStatus, WhatsAppMessageType } from './types';
 
 interface WebhookContact {
@@ -28,6 +32,38 @@ interface WebhookMessage {
     mime_type?: string;
     caption?: string;
     filename?: string;
+  };
+  audio?: {
+    id?: string;
+    mime_type?: string;
+  };
+  video?: {
+    id?: string;
+    mime_type?: string;
+    caption?: string;
+  };
+  sticker?: {
+    id?: string;
+    mime_type?: string;
+  };
+  contacts?: Array<{
+    name?: {
+      formatted_name?: string;
+      first_name?: string;
+      last_name?: string;
+    };
+    phones?: Array<{
+      phone?: string;
+      wa_id?: string;
+      type?: string;
+    }>;
+  }>;
+  location?: {
+    latitude?: number;
+    longitude?: number;
+    name?: string;
+    address?: string;
+    url?: string;
   };
 }
 
@@ -71,6 +107,7 @@ export interface ExtractedInboundMessage {
   mediaId?: string;
   mimeType?: string;
   fileName?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ExtractedStatusUpdate {
@@ -128,6 +165,26 @@ function mapMessageType(type?: string): WhatsAppMessageType {
     return 'document';
   }
 
+  if (type === 'audio') {
+    return 'audio';
+  }
+
+  if (type === 'video') {
+    return 'video';
+  }
+
+  if (type === 'sticker') {
+    return 'sticker';
+  }
+
+  if (type === 'contacts') {
+    return 'contacts';
+  }
+
+  if (type === 'location') {
+    return 'location';
+  }
+
   return 'unsupported';
 }
 
@@ -152,7 +209,168 @@ function extractMessageText(message: WebhookMessage, mappedType: WhatsAppMessage
     return '[Document]';
   }
 
+  if (mappedType === 'audio') {
+    return '[Audio]';
+  }
+
+  if (mappedType === 'video') {
+    return message.video?.caption?.trim() || '[Video]';
+  }
+
+  if (mappedType === 'sticker') {
+    return '[Sticker]';
+  }
+
+  if (mappedType === 'contacts') {
+    const count = message.contacts?.length ?? 0;
+    return count > 0 ? `[Contact card x${count}]` : '[Contact card]';
+  }
+
+  if (mappedType === 'location') {
+    const name = message.location?.name?.trim();
+    const address = message.location?.address?.trim();
+    if (name && address) {
+      return `[Location] ${name} - ${address}`;
+    }
+    if (name) {
+      return `[Location] ${name}`;
+    }
+    return '[Location]';
+  }
+
   return `[Unsupported message type: ${message.type || 'unknown'}]`;
+}
+
+function buildInboundMetadata(message: WebhookMessage, type: WhatsAppMessageType) {
+  const metadata: Record<string, unknown> = {
+    rawType: message.type,
+  };
+
+  if (type === 'image') {
+    metadata.image = message.image ?? {};
+  }
+
+  if (type === 'document') {
+    metadata.document = message.document ?? {};
+  }
+
+  if (type === 'audio') {
+    metadata.audio = message.audio ?? {};
+  }
+
+  if (type === 'video') {
+    metadata.video = message.video ?? {};
+  }
+
+  if (type === 'sticker') {
+    metadata.sticker = message.sticker ?? {};
+  }
+
+  if (type === 'contacts') {
+    metadata.contacts = message.contacts ?? [];
+  }
+
+  if (type === 'location') {
+    metadata.location = message.location ?? {};
+  }
+
+  return metadata;
+}
+
+function resolveInboundMediaInfo(message: WebhookMessage, type: WhatsAppMessageType) {
+  if (type === 'image') {
+    return {
+      mediaId: message.image?.id,
+      mimeType: message.image?.mime_type,
+      fileName: undefined,
+    };
+  }
+
+  if (type === 'document') {
+    return {
+      mediaId: message.document?.id,
+      mimeType: message.document?.mime_type,
+      fileName: message.document?.filename,
+    };
+  }
+
+  if (type === 'audio') {
+    return {
+      mediaId: message.audio?.id,
+      mimeType: message.audio?.mime_type,
+      fileName: undefined,
+    };
+  }
+
+  if (type === 'video') {
+    return {
+      mediaId: message.video?.id,
+      mimeType: message.video?.mime_type,
+      fileName: undefined,
+    };
+  }
+
+  if (type === 'sticker') {
+    return {
+      mediaId: message.sticker?.id,
+      mimeType: message.sticker?.mime_type,
+      fileName: undefined,
+    };
+  }
+
+  return {
+    mediaId: undefined,
+    mimeType: undefined,
+    fileName: undefined,
+  };
+}
+
+async function mirrorInboundMediaToS3(message: ExtractedInboundMessage, storedMessageId: string) {
+  if (!message.mediaId) {
+    return;
+  }
+
+  try {
+    const mediaInfo = await getWhatsAppMediaInfo(message.mediaId);
+    if (!mediaInfo.url) {
+      return;
+    }
+
+    const fileBuffer = await downloadWhatsAppMedia(mediaInfo.url);
+    const s3Key = buildPhoneScopedMediaKey({
+      phone: message.phone,
+      direction: 'inbound',
+      messageType: message.type,
+      fileName: message.fileName,
+      mimeType: message.mimeType ?? mediaInfo.mime_type,
+      externalMediaId: message.mediaId,
+      timestamp: message.timestamp,
+    });
+
+    const uploaded = await uploadBufferToS3({
+      key: s3Key,
+      body: fileBuffer,
+      contentType: message.mimeType ?? mediaInfo.mime_type,
+    });
+
+    await upsertMediaObject({
+      messageId: storedMessageId,
+      phone: message.phone,
+      direction: 'inbound',
+      externalMediaId: message.mediaId,
+      mimeType: message.mimeType ?? mediaInfo.mime_type,
+      fileName: message.fileName,
+      fileSizeBytes: mediaInfo.file_size,
+      s3Bucket: uploaded.bucket,
+      s3Key: uploaded.key,
+      sha256: mediaInfo.sha256,
+      metadata: {
+        mediaInfo,
+      },
+    });
+  } catch (error) {
+    console.error('Failed to mirror inbound media to S3:', error);
+  }
 }
 
 function mapStatusToInternal(status?: string): WhatsAppMessageStatus | null {
@@ -204,18 +422,13 @@ export function extractInboundMessages(payload: WhatsAppWebhookPayload): Extract
           timestamp: toIsoTimestamp(message.timestamp),
           type,
           text: extractMessageText(message, type),
+          metadata: buildInboundMetadata(message, type),
         };
 
-        if (type === 'image') {
-          extracted.mediaId = message.image?.id;
-          extracted.mimeType = message.image?.mime_type;
-        }
-
-        if (type === 'document') {
-          extracted.mediaId = message.document?.id;
-          extracted.mimeType = message.document?.mime_type;
-          extracted.fileName = message.document?.filename;
-        }
+        const mediaInfo = resolveInboundMediaInfo(message, type);
+        extracted.mediaId = mediaInfo.mediaId;
+        extracted.mimeType = mediaInfo.mimeType;
+        extracted.fileName = mediaInfo.fileName;
 
         result.push(extracted);
       }
@@ -264,19 +477,26 @@ export function extractStatusUpdates(payload: WhatsAppWebhookPayload): Extracted
 }
 
 export async function handleWebhookEvent(payload: WhatsAppWebhookPayload) {
-  // Import store here to avoid circular dependencies
-  const { storeInboundMessage, storeStatusUpdate } = await import('./store');
+  // Import repository here to avoid circular dependencies
+  const { storeInboundMessage, storeStatusUpdate } = await import('./repository');
+  const s3Ready = getS3MissingConfig().length === 0;
 
-  // Process inbound messages
   const messages = extractInboundMessages(payload);
   for (const msg of messages) {
-    storeInboundMessage(msg);
+    const stored = await storeInboundMessage(msg);
+    if (s3Ready && msg.mediaId) {
+      await mirrorInboundMediaToS3(msg, stored.id);
+    }
   }
 
-  // Process status updates
   const statuses = extractStatusUpdates(payload);
   for (const status of statuses) {
-    storeStatusUpdate(status);
+    await storeStatusUpdate({
+      ...status,
+      raw: {
+        payload,
+      },
+    });
   }
 }
 

@@ -17,38 +17,38 @@ export type DashboardNavItem = {
 
 export const dashboardNavItems: DashboardNavItem[] = [
   {
-    href: '/dashboard',
+    href: '/',
     label: 'Overview',
     icon: LayoutDashboard,
     description: 'Daily command center',
   },
   {
-    href: '/dashboard/clients',
+    href: '/clients',
     label: 'Clients',
     icon: Users2,
     description: 'Profiles and workflow details',
     hidden: true,
   },
   {
-    href: '/dashboard/database',
+    href: '/database',
     label: 'Database',
     icon: Users2,
     description: 'Profiles, files, and statuses',
   },
   {
-    href: '/dashboard/analytics',
+    href: '/analytics',
     label: 'Analytics',
     icon: BarChart3,
     description: 'Revenue and operations',
   },
   {
-    href: '/dashboard/payments',
+    href: '/payments',
     label: 'Payments',
     icon: WalletCards,
     description: 'Nepal gateway preview',
   },
   {
-    href: '/dashboard/settings',
+    href: '/settings',
     label: 'Settings',
     icon: Settings2,
     description: 'Business configuration',
@@ -58,7 +58,7 @@ export const dashboardNavItems: DashboardNavItem[] = [
 export const dashboardVisibleNavItems = dashboardNavItems.filter((item) => !item.hidden);
 
 export function isDashboardItemActive(pathname: string, href: string) {
-  if (href === '/dashboard') {
+  if (href === '/') {
     return pathname === href;
   }
 

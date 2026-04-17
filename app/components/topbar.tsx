@@ -85,7 +85,7 @@ export function Topbar({
             </Link>
 
             <Link
-              href="/dashboard/database"
+              href="/database"
               className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 py-3 text-sm font-semibold text-white shadow-md transition hover:bg-slate-800"
             >
               <Users2 className="h-4 w-4" />

@@ -85,7 +85,7 @@ export function DashboardOverview() {
               Open public chat
             </Link>
             <Link
-              href="/dashboard/clients"
+              href="/clients"
               className="inline-flex items-center gap-2 rounded-full bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
             >
               Review clients
@@ -184,7 +184,7 @@ export function DashboardOverview() {
                 Clients needing follow-up
               </h2>
             </div>
-            <Link href="/dashboard/clients" className="text-sm font-semibold text-sky-700">
+            <Link href="/clients" className="text-sm font-semibold text-sky-700">
               View all
             </Link>
           </div>
@@ -193,7 +193,7 @@ export function DashboardOverview() {
             {urgentClients.map((client) => (
               <Link
                 key={client.id}
-                href={`/dashboard/clients/${client.id}`}
+                href={`/clients/${client.id}`}
                 className="block rounded-[24px] border border-slate-200/70 bg-white p-4 transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-lg"
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">

@@ -7,9 +7,11 @@ import {
   FileText,
   Image as ImageIcon,
   Loader2,
+  Mic,
   Plus,
   Search,
   Send,
+  Video,
   X,
 } from 'lucide-react';
 
@@ -78,7 +80,18 @@ function normalizePhoneClient(input: string) {
   return normalized;
 }
 
-const MAX_UPLOAD_SIZE = 16 * 1024 * 1024;
+const MAX_UPLOAD_SIZE = 64 * 1024 * 1024;
+
+function getMessageTypeLabel(message: WhatsAppStoredMessage) {
+  if (message.type === 'image') return 'Image';
+  if (message.type === 'document') return message.fileName || 'Document';
+  if (message.type === 'audio') return 'Audio';
+  if (message.type === 'video') return 'Video';
+  if (message.type === 'sticker') return 'Sticker';
+  if (message.type === 'contacts') return 'Contact';
+  if (message.type === 'location') return 'Location';
+  return 'Message';
+}
 
 export function WhatsAppChat() {
   const [isOpen, setIsOpen] = useState(false);
@@ -94,7 +107,7 @@ export function WhatsAppChat() {
 
   const [inputValue, setInputValue] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [selectedFileKind, setSelectedFileKind] = useState<'image' | 'document' | null>(null);
+  const [selectedFileKind, setSelectedFileKind] = useState<'image' | 'document' | 'audio' | 'video' | null>(null);
   const [selectedImagePreviewUrl, setSelectedImagePreviewUrl] = useState<string | null>(null);
 
   const [statusConfigured, setStatusConfigured] = useState(false);
@@ -108,6 +121,8 @@ export function WhatsAppChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const documentInputRef = useRef<HTMLInputElement>(null);
+  const audioInputRef = useRef<HTMLInputElement>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
 
   const selectedConversation = useMemo(() => {
     return conversations.find((conversation) => conversation.id === selectedConversationId) ?? null;
@@ -282,13 +297,13 @@ export function WhatsAppChat() {
     setView('chat');
   };
 
-  const handleAttachmentFile = (kind: 'image' | 'document', file: File | null) => {
+  const handleAttachmentFile = (kind: 'image' | 'document' | 'audio' | 'video', file: File | null) => {
     if (!file) {
       return;
     }
 
     if (file.size > MAX_UPLOAD_SIZE) {
-      setError('File too large. Maximum supported size is 16MB.');
+      setError('File too large. Maximum supported size is 64MB.');
       return;
     }
 
@@ -299,6 +314,16 @@ export function WhatsAppChat() {
 
     if (kind === 'document' && file.type !== 'application/pdf') {
       setError('Only PDF is allowed for document attachment in this phase.');
+      return;
+    }
+
+    if (kind === 'audio' && !file.type.startsWith('audio/')) {
+      setError('Only audio files are allowed for audio attachment.');
+      return;
+    }
+
+    if (kind === 'video' && !file.type.startsWith('video/')) {
+      setError('Only video files are allowed for video attachment.');
       return;
     }
 
@@ -347,13 +372,21 @@ export function WhatsAppChat() {
       if (selectedFile && selectedFileKind) {
         const formData = new FormData();
         formData.append('file', selectedFile);
+        formData.append('phone', to);
 
         const uploadResponse = await fetch('/api/whatsapp/media', {
           method: 'POST',
           body: formData,
         });
 
-        const uploadResult = (await uploadResponse.json()) as { mediaId?: string; error?: string };
+        const uploadResult = (await uploadResponse.json()) as {
+          mediaId?: string;
+          error?: string;
+          s3Key?: string;
+          s3Bucket?: string;
+          mimeType?: string;
+          size?: number;
+        };
         if (!uploadResponse.ok || !uploadResult.mediaId) {
           throw new Error(uploadResult.error || 'Media upload failed.');
         }
@@ -364,14 +397,45 @@ export function WhatsAppChat() {
             type: 'image',
             mediaId: uploadResult.mediaId,
             caption: inputValue.trim() || undefined,
+            s3Key: uploadResult.s3Key,
+            s3Bucket: uploadResult.s3Bucket,
+            mimeType: uploadResult.mimeType,
+            fileSizeBytes: uploadResult.size,
           };
-        } else {
+        } else if (selectedFileKind === 'document') {
           payload = {
             to,
             type: 'document',
             mediaId: uploadResult.mediaId,
             caption: inputValue.trim() || undefined,
             fileName: selectedFile.name,
+            s3Key: uploadResult.s3Key,
+            s3Bucket: uploadResult.s3Bucket,
+            mimeType: uploadResult.mimeType,
+            fileSizeBytes: uploadResult.size,
+          };
+        } else if (selectedFileKind === 'audio') {
+          payload = {
+            to,
+            type: 'audio',
+            mediaId: uploadResult.mediaId,
+            fileName: selectedFile.name,
+            s3Key: uploadResult.s3Key,
+            s3Bucket: uploadResult.s3Bucket,
+            mimeType: uploadResult.mimeType,
+            fileSizeBytes: uploadResult.size,
+          };
+        } else {
+          payload = {
+            to,
+            type: 'video',
+            mediaId: uploadResult.mediaId,
+            caption: inputValue.trim() || undefined,
+            fileName: selectedFile.name,
+            s3Key: uploadResult.s3Key,
+            s3Bucket: uploadResult.s3Bucket,
+            mimeType: uploadResult.mimeType,
+            fileSizeBytes: uploadResult.size,
           };
         }
       } else {
@@ -600,21 +664,28 @@ export function WhatsAppChat() {
                             : 'rounded-bl-none border border-gray-200 bg-white text-gray-900'
                         }`}
                       >
-                        {message.type === 'image' && (
+                        {message.type !== 'text' && (
                           <p className={`mb-1 flex items-center gap-1 text-xs ${isOutbound ? 'text-green-100' : 'text-gray-500'}`}>
-                            <ImageIcon className="h-3.5 w-3.5" />
-                            Image
-                          </p>
-                        )}
-
-                        {message.type === 'document' && (
-                          <p className={`mb-1 flex items-center gap-1 text-xs ${isOutbound ? 'text-green-100' : 'text-gray-500'}`}>
-                            <FileText className="h-3.5 w-3.5" />
-                            {message.fileName || 'PDF document'}
+                            {(message.type === 'image' || message.type === 'sticker') && <ImageIcon className="h-3.5 w-3.5" />}
+                            {message.type === 'document' && <FileText className="h-3.5 w-3.5" />}
+                            {message.type === 'audio' && <Mic className="h-3.5 w-3.5" />}
+                            {message.type === 'video' && <Video className="h-3.5 w-3.5" />}
+                            {getMessageTypeLabel(message)}
                           </p>
                         )}
 
                         <p className="break-words text-sm">{message.text}</p>
+
+                        {message.mediaUrl && (
+                          <a
+                            href={message.mediaUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={`mt-1 inline-flex text-xs underline ${isOutbound ? 'text-green-100' : 'text-blue-600'}`}
+                          >
+                            Open media
+                          </a>
+                        )}
 
                         <div className="mt-1 flex items-center justify-end gap-2">
                           <p className={`text-xs ${isOutbound ? 'text-green-100' : 'text-gray-500'}`}>
@@ -705,6 +776,30 @@ export function WhatsAppChat() {
                       event.target.value = '';
                     }}
                   />
+
+                  <input
+                    ref={audioInputRef}
+                    type="file"
+                    accept="audio/*"
+                    className="hidden"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] ?? null;
+                      handleAttachmentFile('audio', file);
+                      event.target.value = '';
+                    }}
+                  />
+
+                  <input
+                    ref={videoInputRef}
+                    type="file"
+                    accept="video/*"
+                    className="hidden"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] ?? null;
+                      handleAttachmentFile('video', file);
+                      event.target.value = '';
+                    }}
+                  />
                 </div>
 
                 <button
@@ -713,6 +808,22 @@ export function WhatsAppChat() {
                   title="Attach PDF"
                 >
                   <FileText className="h-5 w-5" />
+                </button>
+
+                <button
+                  onClick={() => audioInputRef.current?.click()}
+                  className="rounded-full p-2 text-gray-500 transition hover:bg-gray-100"
+                  title="Attach audio"
+                >
+                  <Mic className="h-5 w-5" />
+                </button>
+
+                <button
+                  onClick={() => videoInputRef.current?.click()}
+                  className="rounded-full p-2 text-gray-500 transition hover:bg-gray-100"
+                  title="Attach video"
+                >
+                  <Video className="h-5 w-5" />
                 </button>
 
                 <input

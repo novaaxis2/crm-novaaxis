@@ -119,7 +119,7 @@ export function DatabaseTable({ records }: DatabaseTableProps) {
                   <td className="px-4 py-3 text-slate-700 font-medium border-r border-slate-200">{record.serialNumber}</td>
                   <td className="px-4 py-3 border-r border-slate-200">
                     <div 
-                      onClick={() => router.push(`/dashboard/database/${record.id}`)}
+                      onClick={() => router.push(`/database/${record.id}`)}
                       className="flex flex-col gap-1 hover:opacity-70 transition cursor-pointer"
                     >
                       <p className="font-semibold text-sky-600 hover:text-sky-700 hover:underline">{record.name}</p>
@@ -200,7 +200,7 @@ export function DatabaseTable({ records }: DatabaseTableProps) {
               {/* Header */}
               <div className="flex items-start justify-between gap-2">
                 <div 
-                  onClick={() => router.push(`/dashboard/database/${record.id}`)}
+              onClick={() => router.push(`/database/${record.id}`)}
                   className="flex-1 min-w-0 hover:opacity-70 transition cursor-pointer"
                 >
                   <p className="font-bold text-sky-600 hover:text-sky-700 hover:underline text-base">{record.name}</p>

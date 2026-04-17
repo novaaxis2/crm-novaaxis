@@ -1,4 +1,13 @@
-export type WhatsAppMessageType = 'text' | 'image' | 'document' | 'unsupported';
+export type WhatsAppMessageType =
+  | 'text'
+  | 'image'
+  | 'document'
+  | 'audio'
+  | 'video'
+  | 'sticker'
+  | 'contacts'
+  | 'location'
+  | 'unsupported';
 
 export type WhatsAppMessageDirection = 'inbound' | 'outbound';
 
@@ -33,6 +42,9 @@ export interface WhatsAppStoredMessage {
   status: WhatsAppMessageStatus;
   timestamp: string;
   error?: string;
+  metadata?: Record<string, unknown>;
+  mediaUrl?: string;
+  s3Key?: string;
 }
 
 export type OutboundSendMessageInput =
@@ -53,6 +65,22 @@ export type OutboundSendMessageInput =
       mediaId: string;
       caption?: string;
       fileName?: string;
+    }
+  | {
+      to: string;
+      type: 'audio';
+      mediaId: string;
+    }
+  | {
+      to: string;
+      type: 'video';
+      mediaId: string;
+      caption?: string;
+    }
+  | {
+      to: string;
+      type: 'sticker';
+      mediaId: string;
     };
 
 export interface WhatsAppSendMessageResult {

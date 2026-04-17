@@ -3,6 +3,7 @@
 import { useState, use, useEffect } from 'react';
 import { ChevronLeft, Image, FileText, Briefcase, Settings, Mail, Phone, MapPin, Copy, Check } from 'lucide-react';
 import Link from 'next/link';
+import { DashboardShell } from '@/app/components/dashboard-shell';
 
 const TABS = [
   { id: 'all', label: 'All', icon: null },
@@ -380,13 +381,14 @@ export default function DatabaseDetailPage({ params }: { params: Promise<{ id: s
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
+    <DashboardShell>
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
       {/* Header with Profile Card */}
       <div className="border-b border-nova-cyan/20 bg-white/50 backdrop-blur-xl">
         <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
           <div className="flex items-center gap-4">
             <Link
-              href="/dashboard/database"
+              href="/database"
               className="inline-flex items-center justify-center rounded-lg p-2 hover:bg-nova-cyan/10 transition-colors"
             >
               <ChevronLeft className="h-5 w-5 text-nova-navy" />
@@ -460,6 +462,7 @@ export default function DatabaseDetailPage({ params }: { params: Promise<{ id: s
         </div>
       </div>
     </div>
+    </DashboardShell>
   );
 }
 

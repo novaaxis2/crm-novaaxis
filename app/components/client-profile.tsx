@@ -50,7 +50,7 @@ export function ClientProfile() {
           description="This profile is not available in the current frontend sample dataset, or the route may be incorrect."
           action={
             <Link
-              href="/dashboard/clients"
+              href="/clients"
               className="inline-flex items-center gap-2 rounded-full bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white"
             >
               Back to clients
@@ -72,7 +72,7 @@ export function ClientProfile() {
         actions={
           <>
             <Link
-              href="/dashboard/clients"
+              href="/clients"
               className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-300"
             >
               <ArrowLeft className="h-4 w-4" />

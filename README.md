@@ -1,14 +1,19 @@
-# NovaAxis WhatsApp Cloud API Setup (Live Chat Only)
+# NovaAxis WhatsApp Cloud API + Neon + S3 Persistence
 
-This project now supports direct live messaging from your dashboard chat UI to real WhatsApp users using Meta WhatsApp Cloud API.
+This project supports direct live messaging from dashboard chat UI to real WhatsApp users using Meta WhatsApp Cloud API, with durable persistence in Neon PostgreSQL and phone-scoped media storage in AWS S3.
 
 Current scope:
 
-- Text messages
-- Image messages
-- PDF messages
+- Two-way text messages
+- Two-way image messages
+- Two-way document/PDF messages
+- Two-way audio messages
+- Two-way video messages
+- Two-way sticker messages
+- Contacts/location metadata capture from inbound webhook payloads
 - Live webhook receive + status updates
-- No database persistence (intentional as requested)
+- Idempotent webhook audit/event persistence in Neon
+- Private S3 media storage + presigned URL access
 
 ---
 
@@ -23,6 +28,13 @@ Configure these in local [`.env.local`](.env.local) and in Vercel production env
 - `META_APP_SECRET`
 - `WHATSAPP_API_VERSION` (default `v23.0`)
 - `WHATSAPP_DEFAULT_TARGET_NUMBER` (optional default receiver)
+- `DATABASE_URL` (or `PGHOST`/`PGPORT`/`PGUSER`/`PGPASSWORD`/`PGDATABASE`)
+- `DATABASE_MAX_POOL_SIZE` (optional, default `5`)
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_REGION`
+- `AWS_BUCKET_NAME`
+- `AWS_S3_PRESIGN_TTL_SECONDS` (optional, default `900`)
 
 Example key template in [`.env.example`](.env.example).
 
@@ -81,7 +93,31 @@ Open dashboard and use widget in [`app/components/whatsapp-chat.tsx`](app/compon
 
 ## 6) Important behavior (as requested)
 
-- Messages are not persisted permanently.
-- In-memory runtime store is used in [`lib/whatsapp/store.ts`](lib/whatsapp/store.ts).
-- Data resets when server restarts/redeploys.
+- Messages, conversations, statuses, and webhook audits are persisted in Neon via [`lib/whatsapp/repository.ts`](lib/whatsapp/repository.ts).
+- Phone number is treated as unique identity (`E.164`) for conversation grouping.
+- Media binaries are mirrored to private S3 by phone-specific prefix via [`lib/whatsapp/s3.ts`](lib/whatsapp/s3.ts).
+- Media is accessed from APIs using presigned URLs.
+
+---
+
+## 7) Phone-scoped S3 key format
+
+Media is stored in S3 with per-user path isolation:
+
+- `whatsapp/{phoneDigits}/{direction}/{type}/{YYYY}/{MM}/{DD}/{generated_name}`
+
+Example:
+
+- `whatsapp/97798XXXXXXXX/inbound/image/2026/04/17/...`
+
+This guarantees separation by unique mobile number.
+
+---
+
+## 8) Security notes
+
+- Keep S3 bucket private.
+- Use presigned URLs only for temporary access.
+- Rotate exposed secrets immediately if they were ever committed/shared.
+- Ensure production webhook signature verification remains enabled in [`app/api/whatsapp/webhook/route.ts`](app/api/whatsapp/webhook/route.ts).
 

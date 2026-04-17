@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getWhatsAppConfig } from '@/lib/whatsapp/env';
+import { markWebhookAuditProcessed, saveWebhookEventAudit } from '@/lib/whatsapp/repository';
 import {
   handleWebhookEvent,
   verifyWebhookSignature,
@@ -29,10 +30,19 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  let parsedBody: WhatsAppWebhookPayload | null = null;
+  let payloadHash: string | null = null;
+
   try {
     const { appSecret } = getWhatsAppConfig();
     const signatureHeader = request.headers.get('x-hub-signature-256');
     const rawBody = await request.text();
+
+    try {
+      parsedBody = JSON.parse(rawBody) as WhatsAppWebhookPayload;
+    } catch {
+      return NextResponse.json({ error: 'Invalid webhook JSON payload' }, { status: 400 });
+    }
 
     const isSignatureValid = verifyWebhookSignature({
       rawBody,
@@ -40,26 +50,35 @@ export async function POST(request: NextRequest) {
       appSecret,
     });
 
+    const audit = await saveWebhookEventAudit({
+      rawBody,
+      payload: parsedBody as Record<string, unknown>,
+      signatureValid: isSignatureValid,
+    });
+    payloadHash = audit.payloadHash;
+
     if (!isSignatureValid) {
       console.error('✗ Webhook signature verification failed');
+      await markWebhookAuditProcessed(payloadHash, 'Invalid webhook signature');
       return NextResponse.json({ error: 'Invalid webhook signature' }, { status: 401 });
     }
 
-    let body: WhatsAppWebhookPayload;
-    try {
-      body = JSON.parse(rawBody) as WhatsAppWebhookPayload;
-    } catch {
-      return NextResponse.json({ error: 'Invalid webhook JSON payload' }, { status: 400 });
-    }
-
-    console.log('📨 Webhook event received:', JSON.stringify(body, null, 2));
+    console.log('📨 Webhook event received:', JSON.stringify(parsedBody, null, 2));
 
     // Handle the incoming webhook event
-    await handleWebhookEvent(body);
+    await handleWebhookEvent(parsedBody);
+
+    await markWebhookAuditProcessed(payloadHash);
 
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Webhook processing error:', error);
+
+    if (payloadHash) {
+      const errorMessage = error instanceof Error ? error.message : 'Webhook processing failed';
+      await markWebhookAuditProcessed(payloadHash, errorMessage);
+    }
+
     return NextResponse.json({ error: 'Processing failed' }, { status: 500 });
   }
 }

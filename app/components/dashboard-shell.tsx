@@ -25,31 +25,31 @@ import { WhatsAppChat } from './whatsapp-chat';
 
 const navItems = [
   {
-    href: '/dashboard',
+    href: '/',
     label: 'Overview',
     icon: LayoutDashboard,
     description: 'Daily command center',
   },
   {
-    href: '/dashboard/database',
+    href: '/database',
     label: 'Database',
     icon: Users2,
     description: 'Profiles, files, and statuses',
   },
   {
-    href: '/dashboard/analytics',
+    href: '/analytics',
     label: 'Analytics',
     icon: BarChart3,
     description: 'Revenue and operations',
   },
   {
-    href: '/dashboard/payments',
+    href: '/payments',
     label: 'Payments',
     icon: WalletCards,
     description: 'Nepal gateway preview',
   },
   {
-    href: '/dashboard/settings',
+    href: '/settings',
     label: 'Settings',
     icon: Settings2,
     description: 'Business configuration',
@@ -230,7 +230,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
                     <span className="inline sm:hidden">Intake</span>
                   </Link>
                   <Link
-                    href="/dashboard/database"
+                    href="/database"
                     className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-slate-950 px-3 py-2 text-xs font-medium text-white transition hover:bg-slate-800 shadow-md"
                   >
                     <Users2 className="h-3.5 w-3.5" />

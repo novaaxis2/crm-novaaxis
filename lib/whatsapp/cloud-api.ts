@@ -50,6 +50,11 @@ function getMediaUploadUrl() {
   return `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/media`;
 }
 
+function getMediaInfoUrl(mediaId: string) {
+  const { apiVersion } = getWhatsAppConfig();
+  return `https://graph.facebook.com/${apiVersion}/${mediaId}`;
+}
+
 function getRequestHeaders() {
   const { accessToken } = getWhatsAppConfig();
   return {
@@ -81,7 +86,7 @@ export async function sendWhatsAppMessage(input: OutboundSendMessageInput): Prom
         ...(input.caption ? { caption: input.caption } : {}),
       },
     };
-  } else {
+  } else if (input.type === 'document') {
     payload = {
       messaging_product: 'whatsapp',
       to,
@@ -90,6 +95,25 @@ export async function sendWhatsAppMessage(input: OutboundSendMessageInput): Prom
         id: input.mediaId,
         ...(input.caption ? { caption: input.caption } : {}),
         ...(input.fileName ? { filename: input.fileName } : {}),
+      },
+    };
+  } else if (input.type === 'audio') {
+    payload = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'audio',
+      audio: {
+        id: input.mediaId,
+      },
+    };
+  } else {
+    payload = {
+      messaging_product: 'whatsapp',
+      to,
+      type: input.type,
+      [input.type]: {
+        id: input.mediaId,
+        ...(input.type === 'video' && 'caption' in input && input.caption ? { caption: input.caption } : {}),
       },
     };
   }
@@ -128,12 +152,63 @@ const SUPPORTED_UPLOAD_TYPES = new Set([
   'image/png',
   'image/webp',
   'application/pdf',
+  'audio/mpeg',
+  'audio/ogg',
+  'audio/aac',
+  'audio/mp4',
+  'video/mp4',
+  'video/3gpp',
+  'image/webp',
 ]);
 
 export function assertSupportedUploadType(mimeType: string) {
   if (!SUPPORTED_UPLOAD_TYPES.has(mimeType)) {
-    throw new Error('Unsupported file type. Allowed: JPEG, JPG, PNG, WEBP, PDF.');
+    throw new Error('Unsupported file type. Allowed: JPEG, JPG, PNG, WEBP, PDF, MP3/OGG/AAC/M4A, MP4/3GPP.');
   }
+}
+
+export interface WhatsAppMediaInfoResult {
+  id: string;
+  mime_type?: string;
+  sha256?: string;
+  file_size?: number;
+  url?: string;
+}
+
+export async function getWhatsAppMediaInfo(mediaId: string): Promise<WhatsAppMediaInfoResult> {
+  const response = await fetch(getMediaInfoUrl(mediaId), {
+    method: 'GET',
+    headers: {
+      ...getRequestHeaders(),
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseErrorResponse(response));
+  }
+
+  const data = (await response.json()) as WhatsAppMediaInfoResult;
+  if (!data.id) {
+    throw new Error('WhatsApp media info response did not include media id.');
+  }
+
+  return data;
+}
+
+export async function downloadWhatsAppMedia(mediaUrl: string) {
+  const response = await fetch(mediaUrl, {
+    method: 'GET',
+    headers: {
+      ...getRequestHeaders(),
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseErrorResponse(response));
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  return Buffer.from(arrayBuffer);
 }
 
 export async function uploadWhatsAppMedia(file: File): Promise<WhatsAppMediaUploadResult> {

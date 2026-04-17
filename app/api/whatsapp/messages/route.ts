@@ -3,7 +3,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { sendWhatsAppMessage } from '@/lib/whatsapp/cloud-api';
 import { getWhatsAppDefaultTargetNumber, isEnvReadyForSending } from '@/lib/whatsapp/env';
 import { normalizeToE164 } from '@/lib/whatsapp/phone';
-import { appendMessage } from '@/lib/whatsapp/store';
+import { appendMessage, findMessageByExternalMessageId, upsertMediaObject } from '@/lib/whatsapp/repository';
+import { getS3Config, getS3MissingConfig } from '@/lib/whatsapp/persistence-env';
+import { buildPhoneScopedMediaKey, uploadBufferToS3 } from '@/lib/whatsapp/s3';
 import type { OutboundSendMessageInput } from '@/lib/whatsapp/types';
 
 export async function POST(request: NextRequest) {
@@ -22,7 +24,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { to, type, text, mediaId, caption, fileName } = body;
+    const { to, type, text, mediaId, caption, fileName, s3Key, s3Bucket, mimeType, fileSizeBytes } = body;
 
     const defaultTarget = getWhatsAppDefaultTargetNumber();
     const toValue = String(to ?? defaultTarget ?? '').trim();
@@ -67,6 +69,34 @@ export async function POST(request: NextRequest) {
         ...(caption ? { caption: String(caption) } : {}),
         ...(fileName ? { fileName: String(fileName) } : {}),
       };
+    } else if (type === 'audio') {
+      if (!mediaId) {
+        return NextResponse.json({ error: 'Missing mediaId field for audio message' }, { status: 400 });
+      }
+      input = {
+        to: resolvedTo,
+        type: 'audio',
+        mediaId: String(mediaId).trim(),
+      };
+    } else if (type === 'video') {
+      if (!mediaId) {
+        return NextResponse.json({ error: 'Missing mediaId field for video message' }, { status: 400 });
+      }
+      input = {
+        to: resolvedTo,
+        type: 'video',
+        mediaId: String(mediaId).trim(),
+        ...(caption ? { caption: String(caption) } : {}),
+      };
+    } else if (type === 'sticker') {
+      if (!mediaId) {
+        return NextResponse.json({ error: 'Missing mediaId field for sticker message' }, { status: 400 });
+      }
+      input = {
+        to: resolvedTo,
+        type: 'sticker',
+        mediaId: String(mediaId).trim(),
+      };
     } else {
       return NextResponse.json({ error: 'Invalid message type' }, { status: 400 });
     }
@@ -80,9 +110,15 @@ export async function POST(request: NextRequest) {
         ? input.text
         : input.type === 'image'
           ? input.caption?.trim() || '[Image]'
-          : input.caption?.trim() || `[Document${input.fileName ? `: ${input.fileName}` : ''}]`;
+          : input.type === 'document'
+            ? input.caption?.trim() || `[Document${input.fileName ? `: ${input.fileName}` : ''}]`
+            : input.type === 'audio'
+              ? '[Audio]'
+              : input.type === 'video'
+                ? input.caption?.trim() || '[Video]'
+                : '[Sticker]';
 
-    const storedMessage = appendMessage({
+    const storedMessage = await appendMessage({
       phone: resolvedTo,
       direction: 'outbound',
       type: input.type,
@@ -91,7 +127,78 @@ export async function POST(request: NextRequest) {
       fileName: input.type === 'document' ? input.fileName : undefined,
       externalMessageId: result.messageId,
       status: 'sent',
+      metadata: {
+        rawResponse: result.rawResponse,
+        outboundPayload: input,
+        providedUploadMetadata: {
+          s3Key,
+          s3Bucket,
+          mimeType,
+          fileSizeBytes,
+        },
+      },
     });
+
+    const s3Ready = getS3MissingConfig().length === 0;
+    if (s3Ready && input.type !== 'text') {
+      let persistedS3Key: string;
+      let persistedS3Bucket: string;
+
+      if (typeof s3Key === 'string' && s3Key.trim() && typeof s3Bucket === 'string' && s3Bucket.trim()) {
+        persistedS3Key = s3Key.trim();
+        persistedS3Bucket = s3Bucket.trim();
+      } else {
+        const generatedKey = buildPhoneScopedMediaKey({
+          phone: resolvedTo,
+          direction: 'outbound',
+          messageType: input.type,
+          fileName: input.type === 'document' ? input.fileName : undefined,
+          externalMediaId: input.mediaId,
+        });
+
+        // Metadata-only mirror for outbound media ID to S3 namespace, without binary duplication.
+        await uploadBufferToS3({
+          key: `${generatedKey}.json`,
+          body: Buffer.from(
+            JSON.stringify(
+              {
+                messageId: storedMessage.id,
+                externalMessageId: result.messageId,
+                mediaId: input.mediaId,
+                type: input.type,
+                phone: resolvedTo,
+                createdAt: new Date().toISOString(),
+              },
+              null,
+              2,
+            ),
+            'utf-8',
+          ),
+          contentType: 'application/json',
+        });
+
+        persistedS3Key = `${generatedKey}.json`;
+        persistedS3Bucket = getS3Config().bucket;
+      }
+
+      const latestStoredMessage = await findMessageByExternalMessageId(result.messageId);
+      const messageId = latestStoredMessage?.id ?? storedMessage.id;
+
+      await upsertMediaObject({
+        messageId,
+        phone: resolvedTo,
+        direction: 'outbound',
+        externalMediaId: input.mediaId,
+        mimeType: typeof mimeType === 'string' ? mimeType : undefined,
+        fileName: input.type === 'document' ? input.fileName : typeof fileName === 'string' ? fileName : undefined,
+        fileSizeBytes: typeof fileSizeBytes === 'number' ? fileSizeBytes : undefined,
+        s3Bucket: persistedS3Bucket,
+        s3Key: persistedS3Key,
+        metadata: {
+          outboundReferenceOnly: persistedS3Key.endsWith('.json'),
+        },
+      });
+    }
 
     console.log(`✓ Message sent successfully to ${resolvedTo}`, result);
 
@@ -105,13 +212,16 @@ export async function POST(request: NextRequest) {
     console.error('Message send error:', errorMessage);
 
     if (resolvedTo) {
-      appendMessage({
+      await appendMessage({
         phone: resolvedTo,
         direction: 'outbound',
         type: 'text',
         text: '[Failed message]',
         status: 'failed',
         error: errorMessage,
+        metadata: {
+          failure: true,
+        },
       });
     }
 

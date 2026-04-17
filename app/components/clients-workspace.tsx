@@ -167,7 +167,7 @@ export function ClientsWorkspace() {
               filteredClients.map((client) => (
                 <Link
                   key={client.id}
-                  href={`/dashboard/clients/${client.id}`}
+                  href={`/clients/${client.id}`}
                   className="group block rounded-[26px] border border-slate-200/70 bg-white p-5 transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_18px_44px_-24px_rgba(15,23,42,0.28)]"
                 >
                   <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
@@ -271,7 +271,7 @@ export function ClientsWorkspace() {
               {attentionClients.map((client) => (
                 <Link
                   key={client.id}
-                  href={`/dashboard/clients/${client.id}`}
+                  href={`/clients/${client.id}`}
                   className="block rounded-[22px] border border-slate-200/70 bg-white p-4 transition hover:border-slate-300"
                 >
                   <div className="flex items-center justify-between gap-3">
