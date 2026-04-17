@@ -51,6 +51,45 @@ interface MessageRow {
   s3_key: string | null;
 }
 
+function asObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function firstString(values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return undefined;
+}
+
+function inferMediaUrlFromMetadata(metadata: unknown, mode: 'view' | 'download') {
+  const obj = asObject(metadata);
+  if (!obj) {
+    return undefined;
+  }
+
+  const directCandidates =
+    mode === 'download'
+      ? [obj.mediaDownloadUrl, obj.downloadUrl, obj.fileUrl]
+      : [obj.mediaViewUrl, obj.mediaUrl, obj.url, obj.imageUrl];
+
+  const nestedMedia = asObject(obj.media);
+  const nestedCandidates = nestedMedia
+    ? mode === 'download'
+      ? [nestedMedia.downloadUrl, nestedMedia.url]
+      : [nestedMedia.viewUrl, nestedMedia.url]
+    : [];
+
+  return firstString([...directCandidates, ...nestedCandidates]);
+}
+
 async function findMessageById(messageId: string) {
   const result = await queryDb<MessageRow>(
     `
@@ -101,19 +140,48 @@ function toConversationSummary(row: ConversationRow): WhatsAppConversationSummar
   };
 }
 
-async function maybePresignMediaKey(s3Key: string | null) {
+async function maybePresignMediaKey(
+  s3Key: string | null,
+  options?: {
+    fileName?: string;
+    contentType?: string;
+  },
+) {
   if (!s3Key) {
     return undefined;
   }
 
   try {
-    return await getPresignedMediaUrl(s3Key);
+    const view = await getPresignedMediaUrl(s3Key, {
+      fileName: options?.fileName,
+      contentType: options?.contentType,
+    });
+
+    const download = await getPresignedMediaUrl(s3Key, {
+      download: true,
+      fileName: options?.fileName,
+      contentType: options?.contentType,
+    });
+
+    return {
+      view,
+      download,
+    };
   } catch {
     return undefined;
   }
 }
 
 async function toStoredMessage(row: MessageRow): Promise<WhatsAppStoredMessage> {
+  const metadata = (row.metadata as Record<string, unknown>) ?? {};
+  const signedUrls = await maybePresignMediaKey(row.s3_key, {
+    fileName: row.file_name ?? undefined,
+    contentType: row.mime_type ?? undefined,
+  });
+
+  const mediaViewUrl = signedUrls?.view ?? inferMediaUrlFromMetadata(metadata, 'view');
+  const mediaDownloadUrl = signedUrls?.download ?? inferMediaUrlFromMetadata(metadata, 'download');
+
   return {
     id: row.id,
     conversationId: row.conversation_id,
@@ -128,16 +196,20 @@ async function toStoredMessage(row: MessageRow): Promise<WhatsAppStoredMessage> 
     status: row.status,
     timestamp: new Date(row.timestamp).toISOString(),
     error: row.error ?? undefined,
-    metadata: (row.metadata as Record<string, unknown>) ?? {},
+    metadata,
     s3Key: row.s3_key ?? undefined,
-    mediaUrl: await maybePresignMediaKey(row.s3_key),
+    mediaUrl: mediaViewUrl,
+    mediaViewUrl,
+    mediaDownloadUrl,
   };
 }
 
 async function upsertContactAndConversation(phone: string, name?: string) {
   const conversationId = conversationIdFromPhone(phone);
   const contactId = contactIdFromPhone(phone);
-  const displayName = name?.trim() || phone;
+  const trimmedName = name?.trim();
+  const hasExplicitName = Boolean(trimmedName);
+  const displayName = trimmedName || phone;
 
   await queryDb(
     `
@@ -145,10 +217,13 @@ async function upsertContactAndConversation(phone: string, name?: string) {
       VALUES ($1, $2, $3, NOW())
       ON CONFLICT (phone_e164)
       DO UPDATE SET
-        display_name = EXCLUDED.display_name,
+        display_name = CASE
+          WHEN $4 THEN EXCLUDED.display_name
+          ELSE whatsapp_contacts.display_name
+        END,
         updated_at = NOW()
     `,
-    [contactId, phone, displayName],
+    [contactId, phone, displayName, hasExplicitName],
   );
 
   await queryDb(
@@ -598,7 +673,9 @@ export async function upsertContactProfile(options: {
   }
 
   const contactId = contactIdFromPhone(phone);
-  const displayName = options.name?.trim() || phone;
+  const trimmedName = options.name?.trim();
+  const hasExplicitName = Boolean(trimmedName);
+  const displayName = trimmedName || phone;
   const profilePhotoUrl = options.avatarUrl?.trim() || null;
 
   await queryDb(
@@ -607,11 +684,14 @@ export async function upsertContactProfile(options: {
       VALUES ($1, $2, $3, $4, NOW())
       ON CONFLICT (phone_e164)
       DO UPDATE SET
-        display_name = EXCLUDED.display_name,
+        display_name = CASE
+          WHEN $5 THEN EXCLUDED.display_name
+          ELSE whatsapp_contacts.display_name
+        END,
         profile_photo_url = COALESCE(EXCLUDED.profile_photo_url, whatsapp_contacts.profile_photo_url),
         updated_at = NOW()
     `,
-    [contactId, phone, displayName, profilePhotoUrl],
+    [contactId, phone, displayName, profilePhotoUrl, hasExplicitName],
   );
 }
 

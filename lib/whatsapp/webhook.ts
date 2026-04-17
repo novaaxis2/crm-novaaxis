@@ -485,14 +485,12 @@ export async function handleWebhookEvent(payload: WhatsAppWebhookPayload) {
   const messages = extractInboundMessages(payload);
   for (const msg of messages) {
     const avatarUrl = await getWhatsAppUserProfilePhotoUrl(msg.phone);
-    if (avatarUrl) {
-      msg.avatarUrl = avatarUrl;
-      await upsertContactProfile({
-        phone: msg.phone,
-        name: msg.name,
-        avatarUrl,
-      });
-    }
+    msg.avatarUrl = avatarUrl ?? undefined;
+    await upsertContactProfile({
+      phone: msg.phone,
+      name: msg.name,
+      avatarUrl: avatarUrl ?? undefined,
+    });
 
     const stored = await storeInboundMessage(msg);
     if (s3Ready && msg.mediaId) {

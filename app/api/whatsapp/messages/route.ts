@@ -3,7 +3,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { sendWhatsAppMessage } from '@/lib/whatsapp/cloud-api';
 import { getWhatsAppDefaultTargetNumber, isEnvReadyForSending } from '@/lib/whatsapp/env';
 import { normalizeToE164 } from '@/lib/whatsapp/phone';
-import { appendMessage, findMessageByExternalMessageId, upsertMediaObject } from '@/lib/whatsapp/repository';
+import {
+  appendMessage,
+  findMessageByExternalMessageId,
+  upsertMediaObject,
+} from '@/lib/whatsapp/repository';
 import { getS3Config, getS3MissingConfig } from '@/lib/whatsapp/persistence-env';
 import { buildPhoneScopedMediaKey, uploadBufferToS3 } from '@/lib/whatsapp/s3';
 import type { OutboundSendMessageInput } from '@/lib/whatsapp/types';
@@ -24,7 +28,20 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { to, type, text, mediaId, caption, fileName, s3Key, s3Bucket, mimeType, fileSizeBytes } = body;
+    const {
+      to,
+      type,
+      text,
+      mediaId,
+      caption,
+      fileName,
+      s3Key,
+      s3Bucket,
+      mimeType,
+      fileSizeBytes,
+      forwardFromMessageId,
+      forwardSourceConversationId,
+    } = body;
 
     const defaultTarget = getWhatsAppDefaultTargetNumber();
     const toValue = String(to ?? defaultTarget ?? '').trim();
@@ -130,6 +147,16 @@ export async function POST(request: NextRequest) {
       metadata: {
         rawResponse: result.rawResponse,
         outboundPayload: input,
+        forwarded: Boolean(forwardFromMessageId),
+        forwardFromMessageId: typeof forwardFromMessageId === 'string' ? forwardFromMessageId : undefined,
+        forwardSourceConversationId: typeof forwardSourceConversationId === 'string' ? forwardSourceConversationId : undefined,
+        media: {
+          s3Key: typeof s3Key === 'string' ? s3Key : undefined,
+          s3Bucket: typeof s3Bucket === 'string' ? s3Bucket : undefined,
+          mimeType: typeof mimeType === 'string' ? mimeType : undefined,
+          fileName: typeof fileName === 'string' ? fileName : undefined,
+          fileSizeBytes: typeof fileSizeBytes === 'number' ? fileSizeBytes : undefined,
+        },
         providedUploadMetadata: {
           s3Key,
           s3Bucket,
@@ -196,6 +223,7 @@ export async function POST(request: NextRequest) {
         s3Key: persistedS3Key,
         metadata: {
           outboundReferenceOnly: persistedS3Key.endsWith('.json'),
+          forwarded: Boolean(forwardFromMessageId),
         },
       });
     }

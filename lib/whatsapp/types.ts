@@ -45,7 +45,10 @@ export interface WhatsAppStoredMessage {
   error?: string;
   metadata?: Record<string, unknown>;
   mediaUrl?: string;
+  mediaViewUrl?: string;
+  mediaDownloadUrl?: string;
   s3Key?: string;
+  s3Bucket?: string;
 }
 
 export type OutboundSendMessageInput =

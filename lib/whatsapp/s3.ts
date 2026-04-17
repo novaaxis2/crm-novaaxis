@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { GetObjectCommand, PutObjectCommand, S3Client, type GetObjectCommandInput } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 import { getS3Config } from './persistence-env';
@@ -128,16 +128,34 @@ export async function uploadBufferToS3(options: {
   };
 }
 
-export async function getPresignedMediaUrl(key: string) {
+export async function getPresignedMediaUrl(
+  key: string,
+  options?: {
+    download?: boolean;
+    fileName?: string;
+    contentType?: string;
+  },
+) {
   const config = getS3Config();
   const s3 = getS3Client();
 
+   const input: GetObjectCommandInput = {
+    Bucket: config.bucket,
+    Key: key,
+  };
+
+  if (options?.contentType) {
+    input.ResponseContentType = options.contentType;
+  }
+
+  if (options?.download) {
+    const safeName = ensureExtension(safeFileNameSegment(options.fileName || 'file'), options.contentType);
+    input.ResponseContentDisposition = `attachment; filename="${safeName}"`;
+  }
+
   const url = await getSignedUrl(
     s3,
-    new GetObjectCommand({
-      Bucket: config.bucket,
-      Key: key,
-    }),
+    new GetObjectCommand(input),
     {
       expiresIn: config.presignTtlSeconds,
     },

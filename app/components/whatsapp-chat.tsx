@@ -4,11 +4,16 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
+  Download,
+  ExternalLink,
   FileText,
+  Forward as ForwardIcon,
   Image as ImageIcon,
+  ImageOff,
   Loader2,
   Mic,
   Plus,
+  Save,
   Search,
   Send,
   Video,
@@ -130,6 +135,52 @@ function imageUrlFromMessage(message: WhatsAppStoredMessage) {
   return null;
 }
 
+function extractFileSizeFromMessage(message: WhatsAppStoredMessage) {
+  const metadata = message.metadata as Record<string, unknown> | undefined;
+  const candidates: unknown[] = [
+    metadata?.fileSizeBytes,
+    metadata?.file_size_bytes,
+    metadata?.fileSize,
+    metadata?.size,
+    (metadata?.media as Record<string, unknown> | undefined)?.fileSizeBytes,
+    (metadata?.media as Record<string, unknown> | undefined)?.size,
+  ];
+
+  for (const candidate of candidates) {
+    const numeric = typeof candidate === 'number' ? candidate : typeof candidate === 'string' ? Number(candidate) : NaN;
+    if (Number.isFinite(numeric) && numeric >= 0) {
+      return Math.floor(numeric);
+    }
+  }
+
+  return undefined;
+}
+
+function getForwardCaption(message: WhatsAppStoredMessage) {
+  const text = message.text.trim();
+  if (!text) {
+    return undefined;
+  }
+
+  if (/^\[(image|document|audio|video|sticker|contact card.*|location.*|unsupported.*)\]$/i.test(text)) {
+    return undefined;
+  }
+
+  return text;
+}
+
+function canForwardMessage(message: WhatsAppStoredMessage) {
+  if (message.type === 'text') {
+    return true;
+  }
+
+  if (message.type === 'image' || message.type === 'document' || message.type === 'audio' || message.type === 'video' || message.type === 'sticker') {
+    return Boolean(message.mediaId);
+  }
+
+  return false;
+}
+
 export function WhatsAppChat() {
   const [isOpen, setIsOpen] = useState(false);
   const [view, setView] = useState<'list' | 'chat'>('list');
@@ -154,6 +205,8 @@ export function WhatsAppChat() {
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isForwardingMessageId, setIsForwardingMessageId] = useState<string | null>(null);
+  const [brokenImageMessageIds, setBrokenImageMessageIds] = useState<Record<string, true>>({});
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -222,7 +275,8 @@ export function WhatsAppChat() {
   const loadConversations = async () => {
     setIsLoadingConversations(true);
     try {
-      const response = await fetch('/api/whatsapp/conversations', { cache: 'no-store' });
+      const refreshProfiles = view === 'list' ? '&refreshProfiles=true' : '';
+      const response = await fetch(`/api/whatsapp/conversations?ts=${Date.now()}${refreshProfiles}`, { cache: 'no-store' });
       if (!response.ok) {
         throw new Error('Failed to load conversations.');
       }
@@ -308,8 +362,160 @@ export function WhatsAppChat() {
     setSelectedImagePreviewUrl(null);
   };
 
+  const buildForwardPayload = (message: WhatsAppStoredMessage, to: string) => {
+    const caption = getForwardCaption(message);
+
+    if (message.type === 'text') {
+      const outgoingText = message.text.trim();
+      if (!outgoingText) {
+        throw new Error('Cannot forward an empty text message.');
+      }
+
+      return {
+        to,
+        type: 'text' as const,
+        text: outgoingText,
+        forwardFromMessageId: message.id,
+        forwardSourceConversationId: message.conversationId,
+      };
+    }
+
+    if (!message.mediaId) {
+      throw new Error('This media message cannot be forwarded because mediaId is missing.');
+    }
+
+    if (message.type === 'image') {
+      return {
+        to,
+        type: 'image' as const,
+        mediaId: message.mediaId,
+        caption,
+        fileName: message.fileName,
+        mimeType: message.mimeType,
+        fileSizeBytes: extractFileSizeFromMessage(message),
+        forwardFromMessageId: message.id,
+        forwardSourceConversationId: message.conversationId,
+      };
+    }
+
+    if (message.type === 'document') {
+      return {
+        to,
+        type: 'document' as const,
+        mediaId: message.mediaId,
+        caption,
+        fileName: message.fileName,
+        mimeType: message.mimeType,
+        fileSizeBytes: extractFileSizeFromMessage(message),
+        forwardFromMessageId: message.id,
+        forwardSourceConversationId: message.conversationId,
+      };
+    }
+
+    if (message.type === 'audio') {
+      return {
+        to,
+        type: 'audio' as const,
+        mediaId: message.mediaId,
+        fileName: message.fileName,
+        mimeType: message.mimeType,
+        fileSizeBytes: extractFileSizeFromMessage(message),
+        forwardFromMessageId: message.id,
+        forwardSourceConversationId: message.conversationId,
+      };
+    }
+
+    if (message.type === 'video') {
+      return {
+        to,
+        type: 'video' as const,
+        mediaId: message.mediaId,
+        caption,
+        fileName: message.fileName,
+        mimeType: message.mimeType,
+        fileSizeBytes: extractFileSizeFromMessage(message),
+        forwardFromMessageId: message.id,
+        forwardSourceConversationId: message.conversationId,
+      };
+    }
+
+    if (message.type === 'sticker') {
+      return {
+        to,
+        type: 'sticker' as const,
+        mediaId: message.mediaId,
+        mimeType: message.mimeType,
+        fileSizeBytes: extractFileSizeFromMessage(message),
+        forwardFromMessageId: message.id,
+        forwardSourceConversationId: message.conversationId,
+      };
+    }
+
+    throw new Error('Forward for this message type is not supported yet.');
+  };
+
+  const handleForwardMessage = async (message: WhatsAppStoredMessage) => {
+    setError(null);
+
+    if (!statusConfigured) {
+      setError('WhatsApp API is not configured yet. Add required environment variables first.');
+      return;
+    }
+
+    if (!canForwardMessage(message)) {
+      setError('This message type cannot be forwarded from dashboard right now.');
+      return;
+    }
+
+    let to = '';
+    try {
+      to = normalizePhoneClient(targetPhone);
+    } catch (phoneError) {
+      const msg = phoneError instanceof Error ? phoneError.message : 'Invalid target phone.';
+      setError(msg);
+      return;
+    }
+
+    setIsForwardingMessageId(message.id);
+    try {
+      const payload = buildForwardPayload(message, to);
+
+      const response = await fetch('/api/whatsapp/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const result = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to forward message.');
+      }
+
+      setInputValue('');
+      clearSelectedFile();
+
+      const refreshedConversations = await loadConversations();
+      const createdOrUpdatedConversation = refreshedConversations.find((conversation) => conversation.phone === to);
+
+      if (createdOrUpdatedConversation) {
+        setSelectedConversationId(createdOrUpdatedConversation.id);
+        setActivePhone(createdOrUpdatedConversation.phone);
+        setView('chat');
+        await loadMessages(createdOrUpdatedConversation.id);
+      }
+    } catch (forwardError) {
+      const msg = forwardError instanceof Error ? forwardError.message : 'Failed to forward message.';
+      setError(msg);
+    } finally {
+      setIsForwardingMessageId(null);
+    }
+  };
+
   const handleSelectConversation = async (conversation: WhatsAppConversationSummary) => {
     setError(null);
+    setBrokenImageMessageIds({});
     setSelectedConversationId(conversation.id);
     setActivePhone(conversation.phone);
     setView('chat');
@@ -318,6 +524,7 @@ export function WhatsAppChat() {
 
   const handleOpenNewChat = () => {
     setError(null);
+    setBrokenImageMessageIds({});
 
     let normalized = '';
     try {
@@ -716,6 +923,10 @@ export function WhatsAppChat() {
                   const isOutbound = message.direction === 'outbound';
                   const inboundDisplayName = selectedConversation?.name || message.phone;
 
+                  const imageUrl = imageUrlFromMessage(message);
+                  const isImageBroken = Boolean(brokenImageMessageIds[message.id]);
+                  const canForward = canForwardMessage(message);
+
                   return (
                     <div
                       key={message.id}
@@ -756,30 +967,98 @@ export function WhatsAppChat() {
 
                         <p className="break-words text-sm">{message.text}</p>
 
-                        {message.type === 'image' && imageUrlFromMessage(message) && (
-                          <a
-                            href={imageUrlFromMessage(message) || '#'}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="mt-2 block"
-                          >
-                            <img
-                              src={imageUrlFromMessage(message) || ''}
-                              alt="Image message"
-                              className="max-h-64 w-auto rounded-xl border border-black/10 object-cover"
-                            />
-                          </a>
+                        {message.type === 'image' && imageUrl && !isImageBroken && (
+                          <img
+                            src={imageUrl}
+                            alt="Image message"
+                            onError={() => {
+                              setBrokenImageMessageIds((prev) => ({ ...prev, [message.id]: true }));
+                            }}
+                            className="mt-2 max-h-64 w-auto rounded-xl border border-black/10 object-cover"
+                          />
                         )}
 
-                        {message.mediaUrl && (
-                          <a
-                            href={message.mediaUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className={`mt-1 inline-flex text-xs underline ${isOutbound ? 'text-green-100' : 'text-blue-600'}`}
-                          >
-                            Open media
-                          </a>
+                        {message.type === 'image' && (!imageUrl || isImageBroken) && (
+                          <div className="mt-2 flex items-center gap-2 rounded-lg border border-dashed border-gray-300 bg-gray-100/70 px-2 py-1.5 text-xs text-gray-600">
+                            <ImageOff className="h-3.5 w-3.5" />
+                            <span>Image preview unavailable</span>
+                          </div>
+                        )}
+
+                        {(message.mediaViewUrl || message.mediaDownloadUrl || message.mediaUrl || canForward) && (
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                            {(message.mediaViewUrl || message.mediaUrl) && (
+                              <a
+                                href={message.mediaViewUrl || message.mediaUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium transition ${
+                                  isOutbound
+                                    ? 'bg-white/20 text-white hover:bg-white/30'
+                                    : 'bg-blue-50 text-blue-700 hover:bg-blue-100'
+                                }`}
+                                title="View media"
+                              >
+                                <ExternalLink className="h-3.5 w-3.5" />
+                                View
+                              </a>
+                            )}
+
+                            {(message.mediaDownloadUrl || message.mediaUrl) && (
+                              <a
+                                href={message.mediaDownloadUrl || message.mediaUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium transition ${
+                                  isOutbound
+                                    ? 'bg-white/20 text-white hover:bg-white/30'
+                                    : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                }`}
+                                title="Download media"
+                              >
+                                <Download className="h-3.5 w-3.5" />
+                                Download
+                              </a>
+                            )}
+
+                            {(message.mediaDownloadUrl || message.mediaUrl) && (
+                              <a
+                                href={message.mediaDownloadUrl || message.mediaUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium transition ${
+                                  isOutbound
+                                    ? 'bg-white/20 text-white hover:bg-white/30'
+                                    : 'bg-violet-50 text-violet-700 hover:bg-violet-100'
+                                }`}
+                                title="Save media"
+                              >
+                                <Save className="h-3.5 w-3.5" />
+                                Save
+                              </a>
+                            )}
+
+                            {canForward && (
+                              <button
+                                type="button"
+                                onClick={() => void handleForwardMessage(message)}
+                                disabled={isForwardingMessageId === message.id || isSending}
+                                className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                  isOutbound
+                                    ? 'bg-white/20 text-white hover:bg-white/30'
+                                    : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                }`}
+                                title="Forward message"
+                              >
+                                {isForwardingMessageId === message.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <ForwardIcon className="h-3.5 w-3.5" />
+                                )}
+                                Forward
+                              </button>
+                            )}
+                          </div>
                         )}
 
                         <div className="mt-1 flex items-center justify-end gap-2">
